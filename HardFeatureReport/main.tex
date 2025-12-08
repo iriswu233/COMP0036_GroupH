@@ -1,0 +1,112 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{tabularx}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{setspace}
+\usepackage{caption}
+
+\captionsetup[table]{labelfont=bf}
+
+\title{Hard-Difficulty Feature Engineering for Football Match Outcome Prediction}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\onehalfspacing
+
+\section{Introduction}
+
+This section of the project focuses on implementing the hard-difficulty feature engineering component for football match outcome prediction. The objective is to construct high-level, information-rich representations of team performance that go beyond raw match statistics. To achieve this, two families of temporal features are designed: an ELO-based rating system that captures the long-term evolution of team strength, and rolling form indicators that summarise short-term performance patterns over each team’s recent matches. 
+
+Both sets of features explicitly use the chronological structure of the data and are updated only using past information. As a result, they encode strategic consistency, momentum, and competitive dynamics in a way that is consistent with common practices in sports analytics. These engineered variables form a strong analytical foundation for later predictive modelling, even though no model training is described in this report section.
+
+\section{Data Preprocessing}
+
+The training dataset consists of 9,600 English Premier League fixtures between 2000 and 2025, with attributes describing match outcomes, team actions and contextual information such as referee names. The raw data includes columns such as full-time goals scored by each team (FTHG, FTAG), half-time goals (HTHG, HTAG), the full-time result (FTR), total shots, shots on target, fouls, corners, yellow cards and red cards.
+
+As a first step, rows containing missing values were removed to ensure that all downstream temporal computations were based on complete information. In addition, inconsistent team names were standardised, for example mapping \texttt{Nott'm Forest} to \texttt{Nottingham Forest}. This standardisation is important because both the ELO system and the rolling form features rely on grouping and updating statistics by team name.
+
+The \texttt{Date} field initially appears in a day-first format. It was therefore parsed using a day-first timestamp parser and converted into a proper \texttt{datetime} type. The dataset was then sorted chronologically by date and re-indexed. This strict chronological ordering is essential, because all hard-difficulty features depend on sequential computation: ELO ratings are updated after each match, and rolling windows must only use past matches when summarising recent form. After preprocessing, the dataset retained its full number of rows and provided a consistent time axis suitable for temporal feature construction.
+
+\section{ELO-Based Feature Construction}
+
+The first major engineered feature set is based on the ELO rating system, which is widely used to model competitive strength in domains such as chess and football. In this implementation, all teams begin with a common base rating of 1500. The training dataset is processed in chronological order. For each match, the current ratings of the home and away teams are retrieved before any update is applied. These pre-match values become the actual features used in the dataset:
+\begin{itemize}
+    \item \texttt{home\_elo\_pre}: the home team’s rating immediately before the match,
+    \item \texttt{away\_elo\_pre}: the away team’s rating immediately before the match,
+    \item \texttt{elo\_diff\_pre}: the difference \texttt{home\_elo\_pre} $-$ \texttt{away\_elo\_pre}.
+\end{itemize}
+
+Once these pre-match ratings have been recorded, they are updated according to the final result using a standard ELO update rule. A learning rate of $K = 20$ controls how strongly each new match influences the ratings, and a home-advantage offset of 50 rating points is added when computing the expected home score. The actual match outcome (home win, draw or away win) is taken from the full-time result column \texttt{FTR} and converted into numerical scores for the two teams. The ratings for both teams are then updated accordingly.
+
+Crucially, rating updates are performed only after the pre-match features have been stored, and the matches are processed strictly in time order. This ensures that the ELO features respect causality and do not leak information from future fixtures into the past. When generating ELO features for the test dataset, the system is initialised using the final ratings obtained after processing all training matches. The test fixtures are then processed in chronological order using the same logic, but without any access to their future outcomes. In this way, the ELO features rely solely on the raw dataset fields \texttt{Date}, \texttt{HomeTeam}, \texttt{AwayTeam} and \texttt{FTR}, and transform them into a dynamic measure of team strength that evolves through time.
+
+\section{Rolling Form Features}
+
+The second family of hard-difficulty features models short-term performance tendencies by examining each team’s recent matches. To construct these features, the original match-level dataset is first reformatted into a unified team-level chronological history that treats home and away appearances symmetrically.
+
+For each fixture, two entries are created: one from the perspective of the home team and one from the perspective of the away team. From each team’s viewpoint, the following statistics are recorded: goals scored (GF), goals conceded (GA), shots, shots on target, fouls, corners, and the number of points earned from the result (three points for a win, one for a draw and zero for a loss). These entries are then sorted by team and date, giving a continuous performance timeline for every team in the league.
+
+Using this unified timeline, rolling sums and means are computed over the previous $k = 5$ matches for each team. The rolling windows are shifted by one match so that the statistics for a given game are based only on past fixtures, not the current one. The resulting features include, for each team:
+\begin{itemize}
+    \item total goals scored and conceded in the last five matches (\texttt{GF\_sum\_last\_5}, \texttt{GA\_sum\_last\_5}),
+    \item total points earned across the last five matches (\texttt{Points\_sum\_last\_5}),
+    \item average goals scored and conceded, and average goal difference over the last five matches,
+    \item rolling averages of shots, shots on target and corners in the last five matches.
+\end{itemize}
+
+After computing these rolling form metrics independently for all teams, they are merged back into the original match-level dataset. For each fixture, the corresponding home and away form statistics are attached by matching on \texttt{(Date, HomeTeam)} and \texttt{(Date, AwayTeam)}. This yields both \texttt{home\_*} and \texttt{away\_*} versions of every rolling feature. Finally, combined indicators are created to capture relative recent form between the two teams, such as the difference in recent points and the difference in recent goal difference over the last five matches.
+
+All rolling-window features are derived entirely from raw fields such as goals, shots and outcomes, and are constructed in a way that avoids any use of future information. They complement the ELO-based features by emphasising short-term momentum, tactical sharpness and performance streaks that may not be fully reflected in long-term ratings.
+
+\section{Summary of Engineered Features}
+
+Table~\ref{tab:hard_features} summarises the main engineered features created in the hard-difficulty stage, including both the ELO-based strength metrics and the rolling form indicators derived from the previous five matches of each team.
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{p{3cm} p{5cm} p{4cm} p{3cm}}
+\hline
+\textbf{Feature Class} & \textbf{Description} & \textbf{Example Features} & \textbf{Purpose} \\
+\hline
+
+ELO-Based Strength &
+A dynamic rating system that tracks long-term team strength based on historical match results and home/away expectations. &
+home\_elo\_pre \newline away\_elo\_pre \newline elo\_diff\_pre &
+Models long-term ability levels \\
+
+Recent Form (Last 5 Matches) &
+Aggregated short-term indicators describing how well each team has performed in its previous fixtures. &
+GF\_sum\_last5 \newline GA\_sum\_last5 \newline Points\_last5 &
+Captures short-term momentum \\
+
+Rolling Match Statistics &
+Averages of key performance metrics across the last five matches, independent of match venue. &
+Shots\_mean\_last5 \newline SOT\_mean\_last5 \newline Corners\_mean\_last5 &
+Represents team behaviour and playing style \\
+
+Form Difference Features &
+Home–away comparative measures constructed by subtracting the away team’s form metrics from the home team’s. &
+form\_points\_diff \newline form\_gd\_diff &
+Quantifies relative advantage \\
+
+\hline
+\end{tabular}
+\caption{Summary of Hard-Difficulty Engineered Features}
+\label{tab:hard_features}
+\end{table}
+
+
+\section{Conclusion}
+
+The hard-difficulty feature engineering phase transforms raw football match data into a rich collection of temporal and competitive indicators. The ELO system models long-term team strength and updates consistently based on historical outcomes, providing pre-match ratings that reflect accumulated performance. The rolling form features describe more immediate performance trends and momentum by aggregating statistics over each team’s recent matches.
+
+Together, these two feature families produce a detailed representation of match context that is substantially more expressive than the original statistics alone. Although no predictive model is trained in this section, the engineered features are designed to be directly usable in subsequent modelling stages and to support more accurate and interpretable predictions of football match outcomes.
+
+\end{document}
